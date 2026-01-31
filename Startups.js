@@ -5,8 +5,9 @@ function retrieveStartUps(acceleratorName) {
   try {
     // Use accelerator NAME instead of URL in the prompt
     const prompt = PROMPTS.retrieveStartUps(acceleratorName);
+    // Retrieve the LLM response
     const raw = callOpenRouter(prompt, CONFIG.STARTUPS_MODEL);
-    if (!raw) return "[]";
+    if (!raw) return "[]"; // return an empty string if no response is provided
     return raw;
   } catch (err) {
     console.log(`Error in retrieveStartUps for "${acceleratorName}":`, err.message);
@@ -19,12 +20,14 @@ function getStartUpsFromHTML(URL) {
   Call the OpenRouter API and retrieve all start-ups that can be found on the website acccessible via a passed URL.
   */
   try {
+    // Retrieve the accelerator webpage via its URL
     const html = UrlFetchApp.fetch(URL).getContentText();
 
     // Only send a small chunk of the HTML to OpenRouter
-    const htmlChunk = html.slice(0, 3000); // adjust as needed
-    const prompt = PROMPTS.extractStartUpsFromHTML(htmlChunk);
+    const htmlChunk = html.slice(0, 3000); 
 
+    // Retrieve all participating start-up
+    const prompt = PROMPTS.extractStartUpsFromHTML(htmlChunk); // select the corresponding prompt
     return callOpenRouter(prompt, CONFIG.STARTUPS_MODEL);
   } catch (err) {
     console.log("Error in getStartUpsFromHTML:", err.message);
@@ -40,18 +43,23 @@ function insertStartUps(jsonString, acceleratorName) {
   If no column headers are found in the Google Sheet, the keys in the JSON are used as headers. 
   */
   try {
+    // Clean the JSON response 
     const dataArray = JSON.parse(cleanJsonOutput(jsonString));
 
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('start-up');
-    if (!sheet) throw new Error("Sheet 'start-up' not found");
+  	// Retrieve the start-up tab throwing an error if not found
+    const startupSh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('start-up');
+    if (!startupSh) throw new Error("Sheet 'start-up' not found");
 
-    const headers = Object.keys(dataArray[0] || {}); // safeguard if empty
+    // Check if the headers already exist. If no "accelerator" column exists, add it
+    const headers = Object.keys(dataArray[0] || {}); 
     if (!headers.includes("accelerator")) headers.push("accelerator");
 
-    if (sheet.getLastRow() === 0) sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    // Use the JSON keys as column headers if none exist
+    if (startupSh.getLastRow() === 0) startupSh.getRange(1, 1, 1, headers.length).setValues([headers]);
 
-    const rows = dataArray.map(item => headers.map(h => h === "accelerator" ? acceleratorName : item[h] || ""));
-    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
+    // Append the start-up information in the sheet, allocating one row for each start-up
+    const rows = dataArray.map(item => headers.map(h => h === "accelerator" ? acceleratorName : item[h] || "")); // leave empty any column that doest match the keys
+    startupSh.getRange(startupSh.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
   } catch (err) {
     console.log("Error in insertStartUps:", err.message);
   }
