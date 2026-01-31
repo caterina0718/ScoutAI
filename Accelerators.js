@@ -1,93 +1,69 @@
-function retrieveStartUps(acceleratorName) {
+function scoutAccelerators(count = 10) {
   /*
-  Call the OpenRouter API to retrieve all the start-ups that participate in accelerator acceleratorName.
+  Retrieve 10 European accelerators that have not been extracted yet.
+  Scrape the internet for accelerators using the OpenRouter API for up to 5 times. After each attempt, wait for 30 seconds to avoid surpassing the request limit. For each set of retrieved accelerators, discard the ones that already exist in the sheet and search again until a batch of 10 has been formed.
   */
-  try {
-    // Use accelerator NAME instead of URL in the prompt
-    const prompt = PROMPTS.retrieveStartUps(acceleratorName);
-    // Retrieve the LLM response
-    const raw = callOpenRouter(prompt, CONFIG.STARTUPS_MODEL);
-    if (!raw) return "[]"; // return an empty string if no response is provided
-    return raw;
-  } catch (err) {
-    console.log(`Error in retrieveStartUps for "${acceleratorName}":`, err.message);
-    return "[]";
+
+  // Retrieve all existing URLs
+  const existingUrls = new Set(getExistingUrls());
+
+  // Initialise variables
+  const newAccelerators = [];
+  const MAX_ATTEMPTS = 5; // number of times to attempt web scraping
+  const RETRY_DELAY_MS = 3000; // break between API requests
+
+  let attempts = 0;
+  while (newAccelerators.length < count && attempts < MAX_ATTEMPTS) {
+    attempts++;
+    // Retrieve only the number of accelerators that is missing to create a new batch of 10
+    const remaining = count - newAccelerators.length;
+    try {
+      // Call the API to retrieve up to 10 accelerators that do not exist in the list yet.
+      const raw = callOpenRouter(PROMPTS.scoutAccelerators(remaining));
+
+      // Clean the response to remove any unneccessary text around the JSON
+      const cleaned = cleanJsonOutput(raw);
+      const results = JSON.parse(cleaned);
+
+      // For any accelerator whose website does not yet exist among the URLs in Google Sheets, add it to the newAccelerators list
+      results.forEach(acc => {
+        if (acc.website && !existingUrls.has(acc.website) && newAccelerators.length < count) {
+          existingUrls.add(acc.website);
+          newAccelerators.push(acc);
+        }
+      });
+    } catch (err) {
+      console.log(`Attempt ${attempts} failed: ${err.message}`);
+    }
+    // As long as there are still attempts left or not enough accelerators have been retrieved, try again.
+    if (newAccelerators.length < count && attempts < MAX_ATTEMPTS) Utilities.sleep(RETRY_DELAY_MS);
   }
+
+  // Append the retrieved accelerators (if any) to the list.
+  if (newAccelerators.length > 0) insertAccelerators(newAccelerators);
+  return newAccelerators;
 }
 
-function getStartUpsFromHTML(URL) {
+function insertAccelerators(dataArray) {
   /*
-  Call the OpenRouter API and retrieve all start-ups that can be found on the website acccessible via a passed URL.
-  */
-  try {
-    // Retrieve the accelerator webpage via its URL
-    const html = UrlFetchApp.fetch(URL).getContentText();
-
-    // Only send a small chunk of the HTML to OpenRouter
-    const htmlChunk = html.slice(0, 3000); 
-
-    // Retrieve all participating start-up
-    const prompt = PROMPTS.extractStartUpsFromHTML(htmlChunk); // select the corresponding prompt
-    return callOpenRouter(prompt, CONFIG.STARTUPS_MODEL);
-  } catch (err) {
-    console.log("Error in getStartUpsFromHTML:", err.message);
-    return "[]";
-  }
-}
-
-function insertStartUps(jsonString, acceleratorName) {
-  /*
-  Insert all the newly scraped start-ups in the start-up tab, for a given accelerator.
-  The function receives a JSON with information about each start-up that participates in acceleratorName and appends a new row for each start-up.
-  Each entry in the variable has the following keys: website (URL), name, country, value proposition (may be empty). 
+  Append newly found accelerators to the 'accelerators' tab.
+  The function receives a JSON array with information about each newly found accelerator and appends a new row for each accelerator.
+  Each entry in the array has the following keys: website (URL), name, country. 
   If no column headers are found in the Google Sheet, the keys in the JSON are used as headers. 
   */
   try {
-    // Clean the JSON response 
-    const dataArray = JSON.parse(cleanJsonOutput(jsonString));
+    // Retrieve the accelerators sheet and check its existence
+    const acceleratorSh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('accelerators');
+    if (!acceleratorSh) throw new Error("Sheet 'accelerators' not found");
 
-  	// Retrieve the start-up tab throwing an error if not found
-    const startupSh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('start-up');
-    if (!startupSh) throw new Error("Sheet 'start-up' not found");
+    // Create column headers using the dataArray keys, if no headers exist
+    const headers = Object.keys(dataArray[0]);
+    if (acceleratorSh.getLastRow() === 0) acceleratorSh.getRange(1, 1, 1, headers.length).setValues([headers]);
 
-    // Check if the headers already exist. If no "accelerator" column exists, add it
-    const headers = Object.keys(dataArray[0] || {}); 
-    if (!headers.includes("accelerator")) headers.push("accelerator");
-
-    // Use the JSON keys as column headers if none exist
-    if (startupSh.getLastRow() === 0) startupSh.getRange(1, 1, 1, headers.length).setValues([headers]);
-
-    // Append the start-up information in the sheet, allocating one row for each start-up
-    const rows = dataArray.map(item => headers.map(h => h === "accelerator" ? acceleratorName : item[h] || "")); // leave empty any column that doest match the keys
-    startupSh.getRange(startupSh.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
+    // Add the passed information to the accelerators tab. Leave the cell empty if a column header does not match any of the dataArray keys.
+    const rows = dataArray.map(item => headers.map(h => item[h] || ""));
+    acceleratorSh.getRange(acceleratorSh.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
   } catch (err) {
-    console.log("Error in insertStartUps:", err.message);
-  }
-}
-
-function generateVP(startUpName) {
-  /*
-  Use the OpenRouter API to generate a value proposition in the format "Startup <X> helps <Target Y> do <What W> so that <Benefit Z> for startup startUpName."
-  */
-  try {
-    // Call the OpenRouter API and retrieve a value proposition
-    return callOpenRouter(PROMPTS.generateVP(startUpName), CONFIG.STARTUPS_MODEL);
-  } catch (err) {
-    console.log(`Error in generateVP for "${startUpName}":`, err.message);
-    return "";
-  }
-}
-
-function insertValueProps(valueProp, startUpId) {
-  /*
-  Insert newly generated value propositions (passed as valueProp) for a given start-up (startUpId), in the correct column."
-  */
-  try {
-    // Retrieve the start-up tab
-    const startupSh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('start-up'); 
-    // Insert the passed ValueProp in the 4th column, on the correct row.
-    startupSh.getRange(startUpId + 1, 4).setValue(valueProp);
-  } catch (err) {
-    console.log("Error in insertValueProps:", err.message);
+    console.log("Error in insertAccelerators:", err.message);
   }
 }
